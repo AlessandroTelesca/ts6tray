@@ -251,7 +251,7 @@ settings row shows them but only toggles the switch.
   others — grouped or replaced if you chose that.
 - It ignores **Silence while my speakers are muted**: the siren plays through the desktop,
   not TeamSpeak, and is there precisely for when you are not listening to TeamSpeak.
-- The siren is a 2.4 s two-tone alarm at full scale, written once to
+- The siren is a 2.4 s two-tone alarm at half of full scale, written once to
   `~/.cache/ts6tray/alarm.wav` and played with the first of `pw-play`, `paplay` or `aplay`
   that works. How loud it really is still follows your system volume.
 - It needs the tray, like every notification: without a session bus there is no alarm.
