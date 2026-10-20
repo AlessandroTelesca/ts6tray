@@ -40,6 +40,7 @@ func TestSettingsRenderShowsEveryRow(t *testing.T) {
 		"  ▸ Bind speaker key\n",
 		"Left-click on the tray icon   ‹ microphone ›",
 		"\nNotifications\n",
+		"\nAlarms\n",
 		"\nDelivery\n",
 		"  Show notifications for   ‹ 3 s ›",
 	} {
@@ -48,7 +49,11 @@ func TestSettingsRenderShowsEveryRow(t *testing.T) {
 		}
 	}
 	for _, g := range trayNotifySwitches {
-		want := "  " + settingsBox(g.def) + " " + g.label + "\n"
+		label := g.label
+		if g.key == trayAlarmKey {
+			label = trayAlarmLabel(s.alarm)
+		}
+		want := "  " + settingsBox(g.def) + " " + label + "\n"
 		if !strings.Contains(out, want) {
 			t.Errorf("render is missing the row %q:\n%s", want, out)
 		}
@@ -58,7 +63,8 @@ func TestSettingsRenderShowsEveryRow(t *testing.T) {
 		!strings.Contains(out, "[ ] Server messages") ||
 		!strings.Contains(out, "[x] Silence while my speakers are muted") ||
 		!strings.Contains(out, "[x] Someone in my channel mutes or unmutes") ||
-		!strings.Contains(out, "[ ] Group bursts (0.5 s)") {
+		!strings.Contains(out, "[ ] Group bursts (0.5 s)") ||
+		!strings.Contains(out, `[x] Nille joins the Lobby`) {
 		t.Errorf("the switch defaults are not the shipped ones:\n%s", out)
 	}
 }

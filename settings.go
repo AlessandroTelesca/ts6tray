@@ -73,7 +73,8 @@ var settingsBindRows = []struct{ target, label string }{
 type settingsState struct {
 	click   string
 	notif   map[string]bool
-	timeout string // one of trayNotifyTimeouts
+	timeout string     // one of trayNotifyTimeouts
+	alarm   alarmWatch // alarm.nick and alarm.channel, shown in the alarm row
 	cursor  int
 	status  string
 
@@ -108,6 +109,7 @@ func settingsLoad(path string) settingsState {
 		click:   trayReadClick(path),
 		notif:   trayReadNotify(path),
 		timeout: trayReadTimeout(path),
+		alarm:   trayReadAlarm(path),
 	}
 }
 
@@ -150,6 +152,10 @@ func settingsRender(s settingsState) string {
 	b.WriteString("\nNotifications\n")
 	for _, g := range trayNotifyGroups {
 		line("  " + settingsBox(s.notif[g.key]) + " " + g.label)
+	}
+	b.WriteString("\nAlarms\n")
+	for _, g := range trayAlarmGroups {
+		line("  " + settingsBox(s.notif[g.key]) + " " + trayAlarmLabel(s.alarm))
 	}
 	b.WriteString("\nDelivery\n")
 	for _, o := range trayNotifyOptions {

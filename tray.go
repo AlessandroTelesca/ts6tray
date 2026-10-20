@@ -554,6 +554,9 @@ type tray struct {
 	// without sleeping. nil means time.Now.
 	now func() time.Time
 
+	// alarmFn sounds the alarm; nil means playAlarm. Tests capture it.
+	alarmFn func()
+
 	// emitFn, when set, takes the place of conn.Emit. Tests use it to capture
 	// which menu signal a change produced, without a bus.
 	emitFn func(path dbus.ObjectPath, name string, args ...any)
@@ -683,9 +686,32 @@ func (t *tray) quietNow() bool {
 
 // noticeIgnoresQuiet reports whether a kind is shown even while "Silence while
 // my speakers are muted" is holding everything else back: the lost connection,
-// and our own actions.
+// our own actions, and the alarm — it plays through the desktop, not
+// TeamSpeak, and is there precisely so the user notices while away.
 func noticeIgnoresQuiet(k noticeKind) bool {
-	return k == noticeConnLost || k == noticeSelf
+	return k == noticeConnLost || k == noticeSelf || k == noticeAlarm
+}
+
+// applyAlarm hands the TSClient who to watch for: the configured user and
+// channel while the switch is on, nobody while it is off. Turning it on while
+// the user is already there sounds it at once.
+func (t *tray) applyAlarm(on bool, w alarmWatch) {
+	if t.ts == nil {
+		return
+	}
+	if !on {
+		w = alarmWatch{}
+	}
+	t.ts.SetAlarm(w)
+}
+
+// soundAlarm plays the siren, or what a test put in its place.
+func (t *tray) soundAlarm() {
+	if t.alarmFn != nil {
+		t.alarmFn()
+		return
+	}
+	playAlarm()
 }
 
 // reloadConfig re-reads the config file and republishes the menu, so the
@@ -695,11 +721,13 @@ func (t *tray) reloadConfig() error {
 	path := trayConfigPath()
 	t.cfgMu.Lock()
 	click, notif, timeout := trayReadClick(path), trayReadNotify(path), trayReadTimeout(path)
+	alarm := trayReadAlarm(path)
 	t.cfgMu.Unlock()
 
 	t.mu.Lock()
 	t.click, t.notif, t.timeout = click, notif, timeout
 	t.mu.Unlock()
+	t.applyAlarm(notif[trayAlarmKey], alarm)
 
 	// Switching batching off must not strand whatever is already queued.
 	if !notif[trayOptBatch] && t.batch != nil {
@@ -751,6 +779,11 @@ func (t *tray) onNotice(n notice) {
 	// mute them.
 	if !noticeIgnoresQuiet(n.kind) && t.quietNow() {
 		return
+	}
+	// The siren goes off now, whatever happens to the notification: a burst
+	// must not hold it back for half a second.
+	if n.kind == noticeAlarm {
+		t.soundAlarm()
 	}
 	if t.batch != nil && t.notifyOptOn(trayOptBatch) {
 		t.batch.add(n)
@@ -839,6 +872,7 @@ func RunTray(ctx context.Context, c *TSClient, quit func(), rl *trayReload) erro
 	if rl != nil {
 		rl.set(t.reloadConfig)
 	}
+	t.applyAlarm(t.notif[trayAlarmKey], trayReadAlarm(trayConfigPath()))
 
 	// Watch for the tray host coming and going, so a shell restart re-registers,
 	// and for our own notifications being closed, so we stop replacing them.

@@ -223,6 +223,39 @@ Kick, ban and timeout wording is best-effort: TeamSpeak has never sent one durin
 so it follows the client's documented event codes rather than an observed message, and a kick
 reason is shown only if one is actually present.
 
+## Alarm
+
+ts6tray can sound a loud siren when one particular person turns up in the lobby. It is set in
+`~/.config/ts6tray/config`:
+
+```ini
+alarm.nick=Nille
+alarm.channel=Lobby
+notify.alarm=on
+```
+
+`alarm.nick` is whose arrival sounds it (the whole nickname), `alarm.channel` is text the
+channel name must contain, and `notify.alarm` is the on/off switch — the row
+`Nille joins the Lobby` under **Alarms** in `ts6tray settings`.
+
+Those are the defaults, so out of the box it watches for **Nille** in any channel with
+**Lobby** in its name (e.g. `Lobby`, `AFK lobby`), on every connected server. Both compare
+case-insensitively. Change the name or channel by hand and run `ts6tray reload`; the
+settings row shows them but only toggles the switch.
+
+- It sounds **once per arrival**: when they enter a matching channel, when ts6tray connects
+  while they are already there, and when the alarm is switched on while they are there.
+  Moving between two matching channels stays quiet; leaving and coming back sounds it again.
+  It never sounds for you yourself.
+- Every alarm is also a desktop notification ("Nille is in Lobby"), delivered like the
+  others — grouped or replaced if you chose that.
+- It ignores **Silence while my speakers are muted**: the siren plays through the desktop,
+  not TeamSpeak, and is there precisely for when you are not listening to TeamSpeak.
+- The siren is a 2.4 s two-tone alarm at half of full scale, written once to
+  `~/.cache/ts6tray/alarm.wav` and played with the first of `pw-play`, `paplay` or `aplay`
+  that works. How loud it really is still follows your system volume.
+- It needs the tray, like every notification: without a session bus there is no alarm.
+
 ## Global hotkeys (window manager)
 
 On Wayland TeamSpeak's own hotkeys don't fire while TeamSpeak is unfocused, so bind the

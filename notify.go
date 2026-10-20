@@ -47,6 +47,7 @@ const (
 	noticeConnLost
 	noticeSelf      // our own mute changes, and being moved or kicked by someone
 	noticeServerMsg // a server-wide broadcast
+	noticeAlarm     // the watched user arrived in a watched channel (alarm.go)
 )
 
 func (k noticeKind) String() string {
@@ -73,6 +74,8 @@ func (k noticeKind) String() string {
 		return "self"
 	case noticeServerMsg:
 		return "serverMsg"
+	case noticeAlarm:
+		return "alarm"
 	}
 	return "unknown"
 }
@@ -166,14 +169,20 @@ type rosterConn struct {
 	chans map[int]string    // clientId -> channel id
 	mute  map[int][2]bool   // clientId -> {inputMuted, outputMuted}
 	cname map[string]string // channelId -> channel name, for "moved you to X"
+
+	// alarmed is every client the alarm has already sounded for and who is
+	// still where it sounded: the alarm fires on the way in, not on every
+	// message while they stay.
+	alarmed map[int]bool
 }
 
 func newRosterConn() *rosterConn {
 	return &rosterConn{
-		nick:  map[int]string{},
-		chans: map[int]string{},
-		mute:  map[int][2]bool{},
-		cname: map[string]string{},
+		nick:    map[int]string{},
+		chans:   map[int]string{},
+		mute:    map[int][2]bool{},
+		cname:   map[string]string{},
+		alarmed: map[int]bool{},
 	}
 }
 
@@ -674,6 +683,71 @@ func (r *roster) applyStatus(raw json.RawMessage) []notice {
 	}
 	// No suffix here: the server is already named in the line.
 	return []notice{{kind: noticeConnLost, title: "Lost connection to " + where}}
+}
+
+// --- the alarm ------------------------------------------------------------
+
+// alarmWatch is who the alarm listens for: a nickname, matched whole, in any
+// channel whose name contains channel. Both compare case-insensitively. The
+// zero value watches for nobody, which is what a switched-off alarm hands in.
+type alarmWatch struct {
+	nick    string
+	channel string
+}
+
+func (w alarmWatch) active() bool { return w.nick != "" && w.channel != "" }
+
+// matches reports whether a client called nick sitting in a channel named
+// chanName is what the watch is for. The nickname is compared first: it is the
+// cheap test that fails for nearly everyone.
+func (w alarmWatch) matches(nick, chanName string) bool {
+	return strings.EqualFold(nick, w.nick) &&
+		strings.Contains(strings.ToLower(chanName), strings.ToLower(w.channel))
+}
+
+// alarms compares every known client against the watch and returns a notice
+// for each one that has newly come to match. It runs after every message
+// rather than inside applyMoved, because a match can be completed by any of
+// three events: the move itself, a clientPropertiesUpdated that finally names
+// a client a bare clientMoved left anonymous, or a channel tree that names the
+// channel. A client who stops matching — moves on, renames, disconnects — is
+// forgotten, so coming back sounds the alarm again. We never alarm on
+// ourselves.
+func (r *roster) alarms(w alarmWatch) []notice {
+	if !w.active() {
+		return nil
+	}
+	var ns []notice
+	for _, rc := range r.conns {
+		for id, ch := range rc.chans {
+			in := id != rc.clientID && w.matches(rc.nick[id], rc.cname[ch])
+			if in == rc.alarmed[id] {
+				continue
+			}
+			if !in {
+				delete(rc.alarmed, id)
+				continue
+			}
+			rc.alarmed[id] = true
+			title := r.nickOf(rc, id) + " is in " + truncRunes(rc.cname[ch], noticeMaxNick)
+			ns = append(ns, r.mk(rc, noticeAlarm, title, "").with(iconJoin))
+		}
+		// Someone who left the server is no longer in chans at all.
+		for id := range rc.alarmed {
+			if _, ok := rc.chans[id]; !ok {
+				delete(rc.alarmed, id)
+			}
+		}
+	}
+	return ns
+}
+
+// resetAlarms forgets who the alarm has sounded for, so a changed watch speaks
+// for whoever already matches it.
+func (r *roster) resetAlarms() {
+	for _, rc := range r.conns {
+		clear(rc.alarmed)
+	}
 }
 
 // --- helpers --------------------------------------------------------------
