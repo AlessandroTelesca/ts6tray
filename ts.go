@@ -108,7 +108,8 @@ type TSClient struct {
 
 	mu    sync.Mutex
 	st    State
-	r     roster // the notification model, reset with st on disconnect
+	r     roster     // the notification model, reset with st on disconnect
+	alarm alarmWatch // who the alarm listens for; the zero value is nobody
 	up    bool
 	conn  *websocket.Conn
 	key   string // last key we authenticated with / were given
@@ -157,6 +158,23 @@ func (c *TSClient) Snapshot() (conns []Conn, icon Icon, up bool) {
 		return nil, IconNone, false
 	}
 	return c.st.Conns(), c.st.Icon(), true
+}
+
+// SetAlarm sets who the alarm listens for; the zero watch switches it off. A
+// changed watch forgets who has already been announced and checks at once, so
+// switching the alarm on while the user is already there sounds it now rather
+// than at their next arrival.
+func (c *TSClient) SetAlarm(w alarmWatch) {
+	c.mu.Lock()
+	if c.alarm == w {
+		c.mu.Unlock()
+		return
+	}
+	c.alarm = w
+	c.r.resetAlarms()
+	ns := c.r.alarms(w)
+	c.mu.Unlock()
+	c.pushNotices(ns)
 }
 
 func (c *TSClient) notify() {
@@ -287,6 +305,7 @@ func (c *TSClient) session(ctx context.Context, key string) (authed bool, err er
 		c.mu.Lock()
 		changed := c.st.Apply(data)
 		ns := c.r.apply(data)
+		ns = append(ns, c.r.alarms(c.alarm)...)
 		c.mu.Unlock()
 		c.pushNotices(ns)
 		if changed {
@@ -327,14 +346,19 @@ func (c *TSClient) readAuthReply(ctx context.Context, conn *websocket.Conn) (str
 		}
 		_ = json.Unmarshal(env.Payload, &pl)
 		c.mu.Lock()
+		var ns []notice
 		err = c.st.ApplyAuth(data)
 		if err == nil {
 			// Same payload, seeded silently: the snapshot is the baseline the
-			// events are diffed against, not news.
+			// events are diffed against, not news. The alarm is the exception:
+			// the watched user already sitting in the lobby is exactly what it
+			// is there to say.
 			c.r = roster{}
 			c.r.auth(env.Payload)
+			ns = c.r.alarms(c.alarm)
 		}
 		c.mu.Unlock()
+		c.pushNotices(ns)
 		if err != nil {
 			return "", fmt.Errorf("parsing auth reply: %w", err)
 		}

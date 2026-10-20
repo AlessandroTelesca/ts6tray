@@ -1058,6 +1058,29 @@ func TestTrayQuietWhenDeafOffPassesEverything(t *testing.T) {
 	}
 }
 
+// TestTrayAlarmSoundsThroughQuiet: the alarm plays its siren and shows its
+// notification even while our speakers are muted — it plays through the
+// desktop, not TeamSpeak — and does neither once its switch is off.
+func TestTrayAlarmSoundsThroughQuiet(t *testing.T) {
+	var deaf atomic.Bool
+	deaf.Store(true)
+	tr, got := deafTray(t, &deaf)
+	tr.notif[trayOptQuietWhenDeaf] = true
+	var sirens atomic.Int32
+	tr.alarmFn = func() { sirens.Add(1) }
+
+	tr.onNotice(notice{kind: noticeAlarm, title: "Nille is in Lobby", icon: iconJoin})
+	if c := got(); sirens.Load() != 1 || len(c) != 1 || c[0].title != "Nille is in Lobby" {
+		t.Fatalf("sirens = %d, notifications = %v; want one of each", sirens.Load(), c)
+	}
+
+	tr.notif[trayAlarmKey] = false
+	tr.onNotice(notice{kind: noticeAlarm, title: "Nille is in Lobby", icon: iconJoin})
+	if c := got(); sirens.Load() != 1 || len(c) != 1 {
+		t.Errorf("switched off: sirens = %d, notifications = %v", sirens.Load(), c)
+	}
+}
+
 // TestTrayQuietWhenDeafDropsRatherThanQueues: a silenced notice must not sit in
 // the batcher waiting to be flushed the moment the speakers come back.
 func TestTrayQuietWhenDeafDropsRatherThanQueues(t *testing.T) {

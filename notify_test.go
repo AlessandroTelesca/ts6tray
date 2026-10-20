@@ -453,7 +453,7 @@ func TestRosterGarbageIsIgnored(t *testing.T) {
 // TestNoticeKindsAllHaveASwitch: every kind the roster can emit must be
 // reachable from a menu item, otherwise it would be silently undisplayable.
 func TestNoticeKindsAllHaveASwitch(t *testing.T) {
-	for k := noticeJoin; k <= noticeConnLost; k++ {
+	for k := noticeJoin; k <= noticeAlarm; k++ {
 		if _, ok := trayNotifyKindGroup[k]; !ok {
 			t.Errorf("noticeKind %v has no Settings -> Notifications switch", k)
 		}
@@ -963,4 +963,99 @@ func TestRosterLearnsChannelNamesFromTheChannelsEvent(t *testing.T) {
 		"invoker":{"id":33,"nickname":"RitzeTest"},"newChannelId":"71","oldChannelId":"23",
 		"type":2,"visibility":1}}`))
 	wantNotices(t, got, []string{"self | RitzeTest moved you to AFK"})
+}
+
+// --- the alarm --------------------------------------------------------------
+
+// alarmRoster is a roster on connection 4 where we are client 30 in "Talk"
+// (2), next to the channels "Lobby" (1) and "AFK lobby" (3), with the given
+// extra clients as {id, channel, nickname}.
+func alarmRoster(t *testing.T, clients ...[3]any) *roster {
+	t.Helper()
+	infos := `{"id":30,"channelId":2,"properties":{"nickname":"Me"}}`
+	for _, c := range clients {
+		infos += fmt.Sprintf(`,{"id":%d,"channelId":%d,"properties":{"nickname":%q}}`, c[0], c[1], c[2])
+	}
+	var r roster
+	r.auth([]byte(`{"connections":[{"id":4,"clientId":30,"properties":{"name":"S"},
+		"channelInfos":{"rootChannels":[{"id":1,"properties":{"name":"Lobby"}},
+			{"id":2,"properties":{"name":"Talk"}},{"id":3,"properties":{"name":"AFK lobby"}}]},
+		"clientInfos":[` + infos + `]}]}`))
+	return &r
+}
+
+// step applies one message and returns what the message and the alarm check
+// after it produced, the way ts.go runs them.
+func step(r *roster, w alarmWatch, m json.RawMessage) []notice {
+	return append(r.apply(m), r.alarms(w)...)
+}
+
+func alarmMove(client int, from, to string) json.RawMessage {
+	return msg(fmt.Sprintf(`{"type":"clientMoved","payload":{"clientId":%d,"connectionId":4,
+		"newChannelId":%q,"oldChannelId":%q,"type":1,"visibility":1}}`, client, to, from))
+}
+
+// TestRosterAlarmSoundsOnArrival: the alarm fires once per arrival in a
+// channel whose name contains the watched text, whatever the case, stays
+// quiet while the user moves between matching channels, and fires again once
+// they have left and come back — including after leaving the server.
+func TestRosterAlarmSoundsOnArrival(t *testing.T) {
+	w := alarmWatch{nick: "nille", channel: "LOBBY"}
+	r := alarmRoster(t, [3]any{40, 2, "Nille"})
+	if ns := r.alarms(w); len(ns) != 0 {
+		t.Fatalf("not in a lobby yet, got %v", lines(ns))
+	}
+	for _, tc := range []struct {
+		name string
+		in   json.RawMessage
+		want []string
+	}{
+		{"into the lobby", alarmMove(40, "2", "1"), []string{"alarm | Nille is in Lobby"}},
+		{"another lobby is still the lobby", alarmMove(40, "1", "3"), []string{}},
+		{"out", alarmMove(40, "3", "2"), []string{}},
+		{"back in", alarmMove(40, "2", "3"), []string{"alarm | Nille is in AFK lobby"}},
+		{"off the server", alarmMove(40, "3", "0"), []string{}},
+		{"reconnecting straight into it", msg(`{"type":"clientMoved","payload":{"clientId":40,"connectionId":4,
+			"newChannelId":"1","oldChannelId":"0","type":0,"visibility":0,"properties":{"nickname":"Nille"}}}`),
+			[]string{"alarm | Nille is in Lobby"}},
+	} {
+		ns := step(r, w, tc.in)
+		var alarms []notice
+		for _, n := range ns {
+			if n.kind == noticeAlarm {
+				alarms = append(alarms, n)
+			}
+		}
+		if g := lines(alarms); !reflect.DeepEqual(g, tc.want) && !(len(g) == 0 && len(tc.want) == 0) {
+			t.Errorf("%s: got %q, want %q", tc.name, g, tc.want)
+		}
+	}
+}
+
+// TestRosterAlarmWaitsForTheName: a client that arrives without a nickname is
+// only recognised once clientPropertiesUpdated names them, and that is when
+// the alarm fires.
+func TestRosterAlarmWaitsForTheName(t *testing.T) {
+	w := alarmWatch{nick: "Nille", channel: "Lobby"}
+	r := alarmRoster(t)
+	wantNotices(t, step(r, w, alarmMove(50, "3", "1")), []string{})
+	wantNotices(t, step(r, w, msg(`{"type":"clientPropertiesUpdated","payload":{"clientId":50,
+		"connectionId":4,"properties":{"nickname":"Nille"}}}`)), []string{"alarm | Nille is in Lobby"})
+}
+
+// TestRosterAlarmPresentAtStart: someone already in the lobby when we connect,
+// or when the watch is changed, is announced — the snapshot is not news for
+// anything else, but it is exactly what the alarm is for. A switched-off watch
+// and our own client never sound it.
+func TestRosterAlarmPresentAtStart(t *testing.T) {
+	w := alarmWatch{nick: "Nille", channel: "Lobby"}
+	r := alarmRoster(t, [3]any{40, 1, "Nille"})
+	wantNotices(t, r.alarms(alarmWatch{}), []string{})
+	wantNotices(t, r.alarms(w), []string{"alarm | Nille is in Lobby"})
+	wantNotices(t, r.alarms(w), []string{})
+	r.resetAlarms()
+	wantNotices(t, r.alarms(w), []string{"alarm | Nille is in Lobby"})
+
+	self := alarmRoster(t)
+	wantNotices(t, self.alarms(alarmWatch{nick: "Me", channel: "Talk"}), []string{})
 }

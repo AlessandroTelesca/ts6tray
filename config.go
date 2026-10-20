@@ -10,6 +10,7 @@ package main
 // caller and renaming them would churn every call site for nothing.
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -26,6 +27,7 @@ func trayConfigPath() string { return filepath.Join(filepath.Dir(DefaultKeyPath(
 //
 //	click=mic|speaker
 //	notify.<group>=on|off
+//	alarm.nick=<nickname>, alarm.channel=<text>
 //
 // Anything else — blank lines, "#" comments, garbage, unknown keys — is ignored,
 // and a missing key falls back to its default, so the older one-line
@@ -122,6 +124,14 @@ var trayNotifyGroups = []trayNotifyGroup{
 	{"serverMsg", "Server messages", false, []noticeKind{noticeServerMsg}},
 }
 
+// trayAlarmGroups are the switches of the Alarms section, between the
+// notifications and the delivery options. The alarm is on by default: a user
+// who sets alarm.nick wants to hear about it. The TUI replaces the label with
+// the live one from trayAlarmLabel, which names who and where.
+var trayAlarmGroups = []trayNotifyGroup{
+	{trayAlarmKey, "The watched user enters the lobby", true, []noticeKind{noticeAlarm}},
+}
+
 // trayNotifyOptions are the delivery switches at the bottom of the same
 // list. They govern no noticeKind, so kinds is nil and notifyEnabled never
 // sees them; notifyOptOn reads them instead.
@@ -140,14 +150,14 @@ var trayNotifyOptions = []trayNotifyGroup{
 	{trayOptQuietWhenDeaf, "Silence while my speakers are muted", true, nil},
 }
 
-// trayNotifySwitches is every switch in the submenu, kinds first: what the
-// config file stores and what the defaults cover.
-var trayNotifySwitches = append(append([]trayNotifyGroup{}, trayNotifyGroups...), trayNotifyOptions...)
+// trayNotifySwitches is every switch in screen order — notifications, alarms,
+// delivery: what the config file stores and what the defaults cover.
+var trayNotifySwitches = append(append(append([]trayNotifyGroup{}, trayNotifyGroups...), trayAlarmGroups...), trayNotifyOptions...)
 
 // trayNotifyKindGroup maps a noticeKind back to the switch that governs it.
 var trayNotifyKindGroup = func() map[noticeKind]string {
 	m := map[noticeKind]string{}
-	for _, g := range trayNotifyGroups {
+	for _, g := range trayNotifySwitches { // the delivery options have no kinds
 		for _, k := range g.kinds {
 			m[k] = g.key
 		}
@@ -266,4 +276,45 @@ func trayTimeoutMillis(v string) int32 {
 	}
 	n, _ := strconv.Atoi(trayNotifyTimeoutDef)
 	return int32(n) * 1000
+}
+
+// --- the alarm ----------------------------------------------------------------
+
+// The alarm has an on/off switch among the notifications (notify.alarm) and
+// two text keys of its own, which the TUI shows but does not edit:
+//
+//	alarm.nick=Nille      whose arrival sounds it, the whole nickname
+//	alarm.channel=Lobby   in any channel whose name contains this
+//
+// Both compare case-insensitively. A key that is missing falls back to its
+// default; one set to nothing switches the alarm off as surely as the switch.
+const (
+	trayAlarmKey        = "alarm"
+	trayAlarmNickKey    = "alarm.nick"
+	trayAlarmChannelKey = "alarm.channel"
+	trayAlarmNickDef    = "Nille"
+	trayAlarmChannelDef = "Lobby"
+)
+
+// trayReadAlarm reads who the alarm listens for. It ignores the on/off switch:
+// that one is read with the rest of the notification switches.
+func trayReadAlarm(path string) alarmWatch {
+	kv := trayReadConfig(path)
+	w := alarmWatch{nick: trayAlarmNickDef, channel: trayAlarmChannelDef}
+	if v, ok := kv[trayAlarmNickKey]; ok {
+		w.nick = v
+	}
+	if v, ok := kv[trayAlarmChannelKey]; ok {
+		w.channel = v
+	}
+	return w
+}
+
+// trayAlarmLabel is the switch's row in the TUI's Alarms section, naming who
+// and where.
+func trayAlarmLabel(w alarmWatch) string {
+	if !w.active() {
+		return "Nobody (set " + trayAlarmNickKey + " and " + trayAlarmChannelKey + " in the config)"
+	}
+	return fmt.Sprintf("%s joins the %s", w.nick, w.channel)
 }
